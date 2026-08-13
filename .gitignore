@@ -1,2 +1,6 @@
-*.csv
+A.csv
+b.csv
+apmr_trajectory.csv
+results.csv
+results copy.csv
 __pycache__/
