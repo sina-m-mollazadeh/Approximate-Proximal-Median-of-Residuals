@@ -111,10 +111,6 @@ def lad_trajectory(
 
 
 
-# ============================================================
-# Run LS/LAD from same initialization
-# ============================================================
-rng = np.random.default_rng(0)
 x0 = rng.standard_normal(A.shape[1])
 x0=np.array([-6.517911526116896281e-01,-1.747172923257771515e-01])
 
