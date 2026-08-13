@@ -1,4 +1,4 @@
-# Surrogate-Based Proximal Framework for Median Absolute Residual Regression (APMR)
+# Surrogate-Based Proximal Framework for Median Absolute Residual Regression
 
 ## Overview
 
@@ -157,7 +157,8 @@ Comprehensive visualization utilities for results.
 - `generate_all_plots(apmr_model, A_test, b_test, results)`: Generate all 18+ visualization figures
 
 #### [test.py](test.py)
-Test script for visualization of optimization trajectories.
+Test script for visualization of optimization trajectories.(2d feature vectors)
+To run this file, alter the make_regression initilization to have a 2d x vector and run the experiments.py with that same problem and after that the test.py will take the trajectory of the APMR method to then run the tests with LS and LAD methods to generate a trajectory plot (trajectory.png)
 
 **Features:**
 - Load pre-computed regression data and APMR solution trajectory
