@@ -1,6 +1,3 @@
-A.csv
-b.csv
-apmr_trajectory.csv
-results.csv
-results copy.csv
+*.csv
+.vscode
 __pycache__/
