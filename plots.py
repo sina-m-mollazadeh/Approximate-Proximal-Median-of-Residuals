@@ -762,6 +762,174 @@ def plot_objective(
     plt.close()
 
 
+def plot_parameter_recovery(results, x_true):
+    """
+    Parameter Recovery Error (L2 norm) versus contamination.
+    Shows how well each method recovers the clean-data ground truth (x_true).
+    """
+    if "_coef" not in results.columns:
+        print("'_coef' column not found in results. Skipping recovery plot.")
+        return
+
+    # Create a copy to avoid SettingWithCopyWarning
+    df_plot = results.copy()
+
+    # Calculate the L2 parameter recovery error for every single experiment run
+    df_plot["ParameterError"] = df_plot["_coef"].apply(
+        lambda coef: np.linalg.norm(np.asarray(coef) - np.asarray(x_true))
+    )
+
+    _plot_comparison(
+        df_plot,
+        metric="ParameterError",
+        ylabel=r"$\|x_{est} - x_{true}\|_2$",
+        title="Parameter Recovery Under Severe Contamination",
+        filename="parameter_recovery",
+        log_scale=True, # Log scale is essential here since LS will explode
+    )
+
+
+def plot_coefficient_comparison(apmr_model, ls_model, x_true):
+    """
+    Side-by-side comparison of the estimated coefficients at high contamination.
+    Shows how APMR matches the clean ground truth while LS diverges.
+    """
+    if apmr_model.coef_ is None or ls_model.coef_ is None or x_true is None:
+        return
+    print(apmr_model.coef_)
+    print(ls_model.coef_)
+    print(x_true)
+    # Slightly wider figure to accommodate the gaps nicely
+    plt.figure(figsize=(12, 5))
+    
+    indices = np.arange(len(x_true))
+    width = 0.2   # Made the columns thinner
+    offset = 0.2  # Increased the offset to create a clean gap between bars
+    
+    # Plot side-by-side grouped bars shifted mathematically to prevent overlap
+    plt.bar(indices- offset, apmr_model.coef_, width, label='APMR (Contaminated)', color='blue', alpha=0.8)
+    plt.bar(indices , x_true, width, label='Clean Ground Truth ($x_{true}$)', color='green', alpha=0.7)
+    plt.bar(indices + offset, ls_model.coef_, width, label='Least Squares (Contaminated)', color='red', alpha=0.6)
+
+    plt.xlabel("Feature Index")
+    plt.ylabel("Coefficient Value")
+    plt.yscale('symlog', linthresh=0.1)
+    plt.title("Coefficient Recovery (APMR vs Least Squares)")
+    
+    # Anchor the x-ticks perfectly to the center of each group
+    plt.xticks(indices)
+
+    # Optional: Log scale if coefficients vary wildly
+    # plt.yscale('symlog', linthresh=1.0) 
+
+    plt.grid(True, alpha=0.3, axis='y')
+    plt.legend()
+
+    _save("coefficient_comparison")
+
+def plot_dual_candidate_objective(history):
+    """
+    APMR objective convergence highlighting the dual-candidate selection.
+
+    A: Base APMR candidate chosen.
+    E: Geometric Memory candidate chosen.
+    """
+
+    if "candidate_chosen" not in history:
+        print("Dual-candidate tracking not found in history.")
+        return
+
+    iterations = np.asarray(history["iteration"])
+    objectives = np.asarray(history["objective"])
+    choices = np.asarray(history["candidate_chosen"])
+
+    print(
+        f"iterations={len(iterations)}, "
+        f"objectives={len(objectives)}, "
+        f"choices={len(choices)}"
+    )
+
+    # ---------------------------------------------------------
+    # The choice at iteration k produces x^{k+1}.
+    # Therefore choice[k] corresponds to objective[k+1].
+    #
+    # The final choice has no corresponding objective if the
+    # algorithm terminated at that iteration.
+    # ---------------------------------------------------------
+
+    n_transitions = min(
+        len(choices),
+        len(iterations) - 1
+    )
+
+    plot_iters = iterations[1:n_transitions + 1]
+    plot_objs = objectives[1:n_transitions + 1]
+    plot_choices = choices[:n_transitions]
+
+    # Separate indices according to selected candidate
+    idx_A = np.where(plot_choices == "A")[0]
+    idx_E = np.where(plot_choices == "E")[0]
+
+    plt.figure(figsize=(8, 5.5))
+
+    # Full objective trajectory
+    plt.plot(
+        iterations,
+        objectives,
+        color="black",
+        linewidth=1.2,
+        alpha=0.4,
+        zorder=1
+    )
+
+    # Base APMR candidate
+    if len(idx_A) > 0:
+        plt.scatter(
+            plot_iters[idx_A],
+            plot_objs[idx_A],
+            color="blue",
+            marker="o",
+            s=35,
+            alpha=0.8,
+            label="Base APMR Candidate ($x_A$)",
+            zorder=2
+        )
+
+    # Geometric memory candidate
+    if len(idx_E) > 0:
+        plt.scatter(
+            plot_iters[idx_E],
+            plot_objs[idx_E],
+            color="red",
+            marker="o",
+            s=35,
+            alpha=0.8,
+            label="Memory Candidate ($x_E$)",
+            zorder=3
+        )
+
+    # Initialization
+    plt.scatter(
+        iterations[0],
+        objectives[0],
+        color="black",
+        marker="s",
+        s=45,
+        label="Initialization",
+        zorder=4
+    )
+
+    plt.xlabel("Outer Iteration")
+    plt.ylabel("Exact MAR Objective")
+    plt.title("Dual-Candidate Selection Trajectory")
+
+    plt.yscale("log")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+    _save("dual_candidate_objective")
+
+
 # ============================================================
 # MASTER FUNCTION
 # ============================================================
@@ -771,6 +939,8 @@ def generate_all_plots(
     A_test,
     b_test,
     results,
+    x_true,
+    ls_model,
 ):
     """
     Generate all figures used for the experiments.
@@ -783,6 +953,10 @@ def generate_all_plots(
     # ------------------------------------------
 
     plot_convergence(
+        apmr_model.history
+    )
+
+    plot_dual_candidate_objective(
         apmr_model.history
     )
 
@@ -860,3 +1034,7 @@ def generate_all_plots(
     # ------------------------------------------
 
     plot_iterations(results)
+
+    plot_coefficient_comparison(apmr_model, ls_model, x_true)
+
+    plot_parameter_recovery(results,x_true)
