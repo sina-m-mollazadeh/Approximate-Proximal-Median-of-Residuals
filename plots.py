@@ -796,9 +796,7 @@ def plot_coefficient_comparison(apmr_model, ls_model, x_true):
     """
     if apmr_model.coef_ is None or ls_model.coef_ is None or x_true is None:
         return
-    print(apmr_model.coef_)
-    print(ls_model.coef_)
-    print(x_true)
+   
     # Slightly wider figure to accommodate the gaps nicely
     plt.figure(figsize=(12, 5))
     
