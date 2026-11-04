@@ -1,11 +1,4 @@
 *.csv
 .vscode
 __pycache__/
-main.aux
-main.bbl
-main.blg
-main.log
-main.out
-main.synctex.gz
-jmlr-coverletter-1.1/
-jmlr-coverletter-1.0.tar.gz
+article/
