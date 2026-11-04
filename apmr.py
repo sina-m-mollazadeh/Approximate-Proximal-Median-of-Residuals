@@ -12,6 +12,8 @@ class APMRRegression:
         self,
         alpha=2.0,
         lambda_=1.0,
+        lambda_max=100.0,
+        rho=0.015,
         eta=0.5,
         trust_scaling=0.9,
         gamma=0.85,
@@ -27,6 +29,8 @@ class APMRRegression:
     ):
         self.alpha = alpha
         self.lambda_ = lambda_
+        self.lambda_max = lambda_max
+        self.rho = rho
         self.eta = eta
         self.trust_scaling = trust_scaling
         self.gamma = gamma
@@ -77,6 +81,10 @@ class APMRRegression:
             idx = np.array([int(np.argmin(np.abs(res - val)))])
         return idx
 
+    def surrogate_objective(self, A, b, x, M) -> float:
+        """Evaluate the frozen local surrogate \tilde{f}_k(x) in O(|M_k| * d) time."""
+        return float(np.mean(np.abs(A[M] @ x - b[M])))
+
     def surrogate_subgradient(self, A, b, x, M):
         """Construct the representative subgradient (arithmetic mean of active set)."""
         active_residuals = A[M] @ x - b[M]
@@ -87,9 +95,9 @@ class APMRRegression:
 
     def compute_trust_radius(self, A, b, x, M):
         """
-        Vectorized O(N*d) trust radius calculation.
-        Uses the minimum distance to zero-crossing and signed switching
-        hyperplanes, without percentile relaxation.
+        Vectorized O(n*d) trust radius calculation.
+        Checks zero-crossing hyperplanes and both (a_i - a_j) and (a_i + a_j)
+        order-switching hyperplanes.
         """
         signed_res = A @ x - b
         abs_res = np.abs(signed_res)
@@ -105,36 +113,42 @@ class APMRRegression:
             else np.inf
         )
 
-        # 2. Minimum distance to signed switching hyperplanes outside M
+        # 2. Minimum distance to switching hyperplanes outside M
         mask_inactive = np.ones(A.shape[0], dtype=bool)
         mask_inactive[M] = False
         J = np.where(mask_inactive)[0]
 
         if J.size == 0:
-            return self.trust_scaling * (
-                d0 if not np.isinf(d0) else 1.0
-            )
+            return self.trust_scaling * (d0 if not np.isinf(d0) else 1.0)
 
         h = int(np.ceil(len(abs_res) / 2.0)) - 1
         val = np.partition(abs_res, h)[h]
         i_med = int(np.argmin(np.abs(abs_res - val)))
 
-        # Signed switching hyperplanes:
-        # (s_i a_i - s_j a_j)^T x = s_i b_i - s_j b_j
-        diff_A = signs[i_med] * A[i_med] - signs[J, None] * A[J]
-        norms_diff = np.linalg.norm(diff_A, axis=1)
-        num_diff = np.abs(abs_res[i_med] - abs_res[J])
-
-        valid_switch = (norms_diff > 1e-12) & (num_diff > 1e-4)
-
-        d_switch = (
-            float(np.min(num_diff[valid_switch] / norms_diff[valid_switch]))
-            if np.any(valid_switch)
+        # 2a. Same-sign switching hyperplanes: (s_i a_i - s_j a_j)^T x = s_i b_i - s_j b_j
+        diff_A_minus = signs[i_med] * A[i_med] - signs[J, None] * A[J]
+        norms_minus = np.linalg.norm(diff_A_minus, axis=1)
+        num_minus = np.abs(abs_res[i_med] - abs_res[J])
+        valid_minus = (norms_minus > 1e-12) & (num_minus > 1e-4)
+        d_minus = (
+            float(np.min(num_minus[valid_minus] / norms_minus[valid_minus]))
+            if np.any(valid_minus)
             else np.inf
         )
 
-        # Select the nearest valid hyperplane
-        min_dist = min(d0, d_switch)
+        # 2b. Opposite-sign switching hyperplanes: (s_i a_i + s_j a_j)^T x = s_i b_i + s_j b_j
+        diff_A_plus = signs[i_med] * A[i_med] + signs[J, None] * A[J]
+        norms_plus = np.linalg.norm(diff_A_plus, axis=1)
+        num_plus = abs_res[i_med] + abs_res[J]
+        valid_plus = (norms_plus > 1e-12) & (num_plus > 1e-4)
+        d_plus = (
+            float(np.min(num_plus[valid_plus] / norms_plus[valid_plus]))
+            if np.any(valid_plus)
+            else np.inf
+        )
+
+        # Select the nearest valid hyperplane across all families
+        min_dist = min(d0, d_minus, d_plus)
 
         if np.isinf(min_dist):
             min_dist = 1.0
@@ -172,25 +186,26 @@ class APMRRegression:
         val = np.partition(abs_e, h)[h]
         i_med = int(np.argmin(np.abs(abs_e - val)))
 
-        # 4. Signed switching hyperplane ray intersections
         signs = np.where(e >= 0.0, 1.0, -1.0)
 
-        den = signs[i_med] * v[i_med] - signs[J] * v[J]
-        num = abs_e[J] - abs_e[i_med]
+        # 4a. Same-sign switching ray intersections: (s_i v_i - s_j v_j) alpha = |e_j| - |e_i|
+        den_minus = signs[i_med] * v[i_med] - signs[J] * v[J]
+        num_minus = abs_e[J] - abs_e[i_med]
+        valid_minus = (np.abs(den_minus) > 1e-12) & (np.abs(num_minus) > 1e-4)
+        alphas_minus = num_minus[valid_minus] / den_minus[valid_minus]
+        alphas_minus = alphas_minus[alphas_minus > 1e-6]
+        a_minus = float(np.min(alphas_minus)) if alphas_minus.size > 0 else np.inf
 
-        valid_s = (np.abs(den) > 1e-12) & (np.abs(num) > 1e-4)
+        # 4b. Opposite-sign switching ray intersections: (s_i v_i + s_j v_j) alpha = -(|e_i| + |e_j|)
+        den_plus = signs[i_med] * v[i_med] + signs[J] * v[J]
+        num_plus = -(abs_e[J] + abs_e[i_med])
+        valid_plus = (np.abs(den_plus) > 1e-12) & (np.abs(num_plus) > 1e-4)
+        alphas_plus = num_plus[valid_plus] / den_plus[valid_plus]
+        alphas_plus = alphas_plus[alphas_plus > 1e-6]
+        a_plus = float(np.min(alphas_plus)) if alphas_plus.size > 0 else np.inf
 
-        alphas_s = num[valid_s] / den[valid_s]
-        alphas_s = alphas_s[alphas_s > 1e-6]
-
-        a_switch = (
-            float(np.min(alphas_s))
-            if alphas_s.size > 0
-            else np.inf
-        )
-
-        # 5. Nearest positive intersection, without quantile relaxation
-        res_alpha = min(a0, a_switch)
+        # 5. Nearest positive intersection across all hyperplanes in H_k
+        res_alpha = min(a0, a_minus, a_plus)
 
         return res_alpha if not np.isinf(res_alpha) else 0.0
 
@@ -264,13 +279,29 @@ class APMRRegression:
             alpha_k = self.alpha / ((k + 1) ** 0.75)
             z_k = x - alpha_k * g_k
 
-            # --- 3. Approximate Proximal Solver (with Euclidean Projection) ---
-            u = z_k.copy()
-            best_u = u.copy()
-            best_u_obj = np.inf
-            lambda_k = self.lambda_ * (1 + 0.015 * k)
-            inner_count = 0
+            # --- 3. Approximate Proximal Solver (O(|M_k| * d) per inner step) ---
+            lambda_k = min(self.lambda_max, self.lambda_ * (1.0 + self.rho * k))
 
+            # Anchor best_u to x^k so Phi_k(x_A^{k+1}) <= Phi_k(x^k) is guaranteed (H1)
+            phi_xk = self.surrogate_objective(A_aug, b, x, M_k) + (
+                0.5 / lambda_k
+            ) * float(np.sum((x - z_k) ** 2))
+            best_u = x.copy()
+            best_u_phi = phi_xk
+
+            # Project initial forward point z_k onto Trust Ball B(x^k, R_k)
+            diff_z = z_k - x
+            dist_z = np.linalg.norm(diff_z)
+            u = x + (R_k / dist_z) * diff_z if dist_z > R_k else z_k.copy()
+
+            phi_u0 = self.surrogate_objective(A_aug, b, u, M_k) + (
+                0.5 / lambda_k
+            ) * float(np.sum((u - z_k) ** 2))
+            if phi_u0 < best_u_phi:
+                best_u_phi = phi_u0
+                best_u = u.copy()
+
+            inner_count = 0
             for t in range(self.inner_iter):
                 s = self.surrogate_subgradient(A_aug, b, u, M_k)
                 prox_grad = s + (u - z_k) / lambda_k
@@ -285,9 +316,12 @@ class APMRRegression:
                 else:
                     u_new = v
 
-                obj_u = self.objective(A_aug, b, u_new)
-                if obj_u < best_u_obj:
-                    best_u_obj = obj_u
+                # O(|M_k| * d) surrogate proximal objective evaluation
+                phi_u = self.surrogate_objective(A_aug, b, u_new, M_k) + (
+                    0.5 / lambda_k
+                ) * float(np.sum((u_new - z_k) ** 2))
+                if phi_u < best_u_phi:
+                    best_u_phi = phi_u
                     best_u = u_new.copy()
 
                 if np.linalg.norm(u_new - u) / max(1.0, np.linalg.norm(u)) < self.inner_tol:
@@ -297,33 +331,50 @@ class APMRRegression:
                 u = u_new
                 inner_count = t + 1
 
-            x_A = best_u if best_u_obj < self.objective(A_aug, b, u) else u.copy()
-            Q_A = self.q_score(A_aug, b, x, x_A)
+            # Select inner candidate with lowest surrogate proximal objective Phi_k
+            x_A = best_u.copy()
+            f_xA = self.objective(A_aug, b, x_A)
+
+            # If the trust-radius floor allowed x_A to cross a switching kink and increase f,
+            # backtrack along the segment (x_A - x) inside the true cell until f(x_A) < f(x^k)
+            if f_xA >= f_xk:
+                step_vec = u - x
+                for bt in range(1, 12):
+                    cand_bt = x + (0.5 ** bt) * step_vec
+                    f_bt = self.objective(A_aug, b, cand_bt)
+                    if f_bt < f_xk:
+                        x_A = cand_bt
+                        f_xA = f_bt
+                        break
+                else:
+                    # At exact local minimum kink: remain at x^k (zero displacement)
+                    x_A = x.copy()
+                    f_xA = f_xk
+
+            disp_A_sq = float(np.sum((x_A - x) ** 2))
+            Q_A = (f_xk - f_xA) / disp_A_sq if disp_A_sq > 1e-18 else 0.0
 
             # --- 4. Geometric Memory Candidate ---
             x_E = x + E_k
             Q_E = self.q_score(A_aug, b, x, x_E)
 
-            # --- 5. Stationarity-Safeguarded Selection Rule ---
+            # --- 5. Stationarity-Safeguarded Selection Rule (Strictly Enforcing H1: Q > 0) ---
             norm_E = np.linalg.norm(E_k)
             S_E = False
 
-            # Safe checking prevents breaking when ||E^k|| = 0
-            if norm_E > 1e-14:
+            if norm_E > 1e-14 and Q_E > 0.0:
                 M_E = self.active_median_set(A_aug, b, x_E)
                 g_E = self.surrogate_subgradient(A_aug, b, x_E, M_E)
-                # Ensure the H2 Stationarity Bound holds
                 S_E = np.linalg.norm(g_E) <= self.b_safeguard * norm_E
 
-                if self.verbose and k % 10 == 0:
-                    print(f"  [Debug] Q_E: {Q_E:.2e} vs Q_A: {Q_A:.2e} | "
-                          f"||g_E||: {np.linalg.norm(g_E):.2f} <= {self.b_safeguard * norm_E:.2f} (S_E={S_E})")
-
-            if Q_E > Q_A and S_E:
+            if Q_E > max(0.0, Q_A) and S_E:
                 x_next = x_E.copy()
                 chosen = "E"
-            else:
+            elif Q_A > 0.0:
                 x_next = x_A.copy()
+                chosen = "A"
+            else:
+                x_next = x.copy()
                 chosen = "A"
 
             # --- 6. Memory Update ---

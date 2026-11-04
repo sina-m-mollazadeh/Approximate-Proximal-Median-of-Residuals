@@ -27,40 +27,135 @@ from datasets import (
     mean_absolute_error,
     median_absolute_residual,
 )
-def load_california_housing_with_outliers(csv_path,data_percentage=100,random_state=42):
+def load_california_housing_with_outliers(
+    csv_path,
+    data_percentage=100,
+    random_state=42,
+    scale=True
+):
     """
-    Loads California Housing, preprocesses features, and injects outliers.
+    Load the California Housing dataset, preprocess categorical features,
+    optionally sample the dataset, and optionally standardize features
+    and target values.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to the California Housing CSV file.
+    data_percentage : float, default=100
+        Percentage of rows to retain, between 0 and 100.
+    random_state : int, default=42
+        Random seed for reproducible sampling.
+    scale : bool, default=True
+        Whether to standardize A and b.
+
+    Returns
+    -------
+    A : np.ndarray, shape (n_samples, n_features)
+        Feature matrix.
+    b : np.ndarray, shape (n_samples,)
+        Target vector.
+    x_true : None
+        Placeholder retained for compatibility with existing code.
+    scaler : StandardScaler or None
+        Fitted feature scaler.
+    scaler_y : StandardScaler or None
+        Fitted target scaler.
     """
-    # 1. Load data
+
+    # 1. Validate parameters
+    if not 0 < data_percentage <= 100:
+        raise ValueError("data_percentage must be in (0, 100].")
+
+    # 2. Load data and remove missing values
     df = pd.read_csv(csv_path)
-    
-    # 2. Handle missing data (total_bedrooms has NaNs)
     df = df.dropna().reset_index(drop=True)
 
+    if df.empty:
+        raise ValueError("The dataset is empty after removing missing values.")
 
+    # 3. Separate target and features
+    if "median_house_value" not in df.columns:
+        raise ValueError(
+            "The dataset must contain 'median_house_value'."
+        )
+
+    b = df["median_house_value"].to_numpy(dtype=float)
+    X_df = df.drop(columns=["median_house_value"]).copy()
+
+    # 4. Encode categorical features using a fixed category set
+    if "ocean_proximity" in X_df.columns:
+        ocean_categories = [
+            "<1H OCEAN",
+            "INLAND",
+            "ISLAND",
+            "NEAR BAY",
+            "NEAR OCEAN",
+        ]
+
+        unknown_categories = (
+            set(X_df["ocean_proximity"].unique())
+            - set(ocean_categories)
+        )
+
+        if unknown_categories:
+            raise ValueError(
+                f"Unexpected ocean_proximity categories: "
+                f"{unknown_categories}"
+            )
+
+        X_df["ocean_proximity"] = pd.Categorical(
+            X_df["ocean_proximity"],
+            categories=ocean_categories
+        )
+
+        X_df = pd.get_dummies(
+            X_df,
+            columns=["ocean_proximity"],
+            drop_first=True,
+            dtype=float
+        )
+
+    # Keep a fixed feature ordering
+    feature_columns = X_df.columns.tolist()
+    A = X_df.to_numpy(dtype=float)
+
+    # 5. Sample rows AFTER feature construction
     if data_percentage < 100:
-        df = df.sample(
-            frac=data_percentage / 100,
-            random_state=random_state
-        ).reset_index(drop=True)
-    
-    # 3. Separate target (b)
-    b = df['median_house_value'].values
-    
-    # 4. Separate features (A) and handle categorical ocean_proximity
-    X_df = df.drop(columns=['median_house_value'])
-    X_df = pd.get_dummies(X_df, columns=['ocean_proximity'], drop_first=True, dtype=float)
-    A = X_df.values
-    
-    # 5. Standardize A (Crucial for APMR step norms and gradient calculations)
-    scaler = StandardScaler()
-    A = scaler.fit_transform(A)
-    scaler_y = StandardScaler()
-    b = scaler_y.fit_transform(b.reshape(-1, 1)).flatten()
-    
-    x_true = None 
-    
-    return A, b, x_true,scaler,scaler_y
+        n_samples = max(
+            1,
+            int(len(b) * data_percentage / 100)
+        )
+
+        rng = np.random.RandomState(random_state)
+        indices = rng.choice(
+            len(b),
+            size=n_samples,
+            replace=False
+        )
+
+        A = A[indices]
+        b = b[indices]
+
+    # 6. Standardize features and target
+    scaler = None
+    scaler_y = None
+
+    if scale:
+        scaler = StandardScaler()
+        A = scaler.fit_transform(A)
+
+        scaler_y = StandardScaler()
+        b = scaler_y.fit_transform(
+            b.reshape(-1, 1)
+        ).ravel()
+
+    # 7. Ground-truth coefficients are defined externally
+    x_true = None
+
+    # 8. Return values in the original order
+    return A, b, x_true, scaler, scaler_y
+
 
 from plots import generate_all_plots
 
@@ -116,9 +211,11 @@ def make_lqs_model(
         n_candidates=n_candidates,
         random_state=random_state,
     )
-    
+
+
+
 def run_single_experiment(outlier_fraction,random_state=0,verbose=False):
-    synthetic = True
+    synthetic = False
     if synthetic:
         A, b, x_true = make_regression(
                 n_samples=1000,
@@ -128,23 +225,31 @@ def run_single_experiment(outlier_fraction,random_state=0,verbose=False):
                 random_state=random_state,
             )
     else:
-        A, b, x_true,scaler,scaler_y = load_california_housing_with_outliers(csv_path="data sets/housing.csv",data_percentage=20)
+        scale = True
+        A, b, x_true,scaler,scaler_y = load_california_housing_with_outliers(csv_path="data sets/housing.csv",data_percentage=100,scale=scale)
         x_true = np.array([
             -38842.167557, -35829.136219, 9856.017359, -21012.224327, 
             45615.736073, -39188.338792, 18967.609144, 77469.652853, 
             -20179.158814, 3106.787118, -2126.142932, 3015.681664
         ])
-        x_true = x_true * scaler.scale_ / scaler_y.scale_[0]
+        if scale:
+            x_true = x_true * scaler.scale_ / scaler_y.scale_[0]
 
     np.savetxt("A.csv", A)
     np.savetxt("x.csv",x_true)
     np.savetxt("b.csv",b)
 
-    (A_train, A_test, b_train, b_test,) = train_test_split(A, b, test_size=0.15, random_state=random_state,)
+    (A_train, A_test, b_train, b_test,) = train_test_split(A, b, test_size=0.2, random_state=random_state,)
 
     if outlier_fraction > 0:
-        b_train = add_outliers(b_train, fraction=outlier_fraction, scale=250, random_state=random_state)    
+        noise_scale = 500 * np.std(b_train)
 
+        b_train = add_outliers(
+            b_train,
+            fraction=outlier_fraction,
+            scale=noise_scale,
+            random_state=random_state
+        )
     signal = A_train @ x_true
     noise = b_train - signal
 
@@ -153,31 +258,34 @@ def run_single_experiment(outlier_fraction,random_state=0,verbose=False):
 
     rng = np.random.default_rng(random_state)
 
-    apmr = APMRRegression(alpha=2.0,
-            lambda_=1.0,
-            eta=0.5,
-            trust_scaling=0.9,
-            gamma=0.85,
-            b_safeguard=1e10,
-            inner_iter=2000,
-            max_iter=10000,
-            tol=1e-8,
-            inner_tol=1e-8,
-            fit_intercept=True,
-            initial_point=None,
-            random_state=random_state,
-            verbose=verbose)
+    apmr = APMRRegression(
+        alpha=0.5,
+        lambda_=1.0,
+        eta=0.25,
+        trust_scaling=0.9,
+        gamma=0.85,
+        b_safeguard=1e8,
+        inner_iter=100,
+        max_iter=10000,
+        tol=1e-10,
+        lambda_max=100.0,
+        inner_tol=1e-10,
+        fit_intercept=True,
+        initial_point=np.ones(A[0].shape),
+        random_state=random_state,
+        verbose=verbose,
+    )
 
     run_methods = {
         "APMR": True,
-        "LeastSquares": False,
+        "LeastSquares": True,
         "LAD": True,
-        "Huber": False,
-        "TukeyLasso": False,
-        "LMS": False,
-        "LQS": False,
+        "Huber": True,
+        "TukeyLasso": True,
+        "LMS": True,
+        "LQS": True,
         "MIO": False,
-        "RANSAC": False,
+        "RANSAC": True,
     }
 
     models = {}
@@ -215,8 +323,8 @@ def run_single_experiment(outlier_fraction,random_state=0,verbose=False):
         huber = HuberRegressor(
             epsilon=1.35,
             alpha=0.0,
-            max_iter=1000,
-            tol=1e-6,
+            max_iter=500,
+            tol=1e-3,
         )
         start_time = time.time()
         huber.fit(A_train, b_train)
@@ -263,7 +371,7 @@ def run_single_experiment(outlier_fraction,random_state=0,verbose=False):
     if run_methods["MIO"]:
         lqs_mio=make_lqs_model_mio(
             quantile=0.5,
-            time_limit=times_exec[0],
+            time_limit=10000,
             mip_gap=0.0,
             threads=0,
             verbose=verbose
@@ -399,13 +507,13 @@ def benchmark():
     for seed in seeds:
        for fraction in fractions:
 
-            print("Running experiment | "f"outliers={fraction:.1f} "f"seed={seed}")
+            print("Running experiment | "f"outliers={fraction} "f"seed={seed}")
 
             (model,table,A_test_run,b_test_run,x_true,ls) = run_single_experiment(fraction,random_state=seed,verbose=False)
 
             frames.append(table)
 
-            if seed == 0 and fraction == 0.5:                
+            if seed == seeds[0] and fraction == fractions[-1]:                
                 apmr_model = model
                 A_test = A_test_run
                 b_test = b_test_run

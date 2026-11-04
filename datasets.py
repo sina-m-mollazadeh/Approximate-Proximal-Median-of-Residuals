@@ -75,7 +75,7 @@ def add_outliers(
 
     idx = rng.choice(n, size=m, replace=False)
 
-    corrupted[idx] += scale * rng.standard_normal(m)
+    corrupted[idx] += scale * (1.0 + np.abs(rng.standard_t(df=1, size=m)))
 
     return corrupted
 
