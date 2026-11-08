@@ -9,16 +9,6 @@ To overcome the nonconvex, nonsmooth, and piecewise-affine nature of the MAR obj
 
 ---
 
-## Key Features
-
-- **Exact Lower-Median Order-Statistic Optimization**: Minimizes $f(x) = r_{(h)}(x)$ with $h = \lceil n/2 \rceil$, assigning zero subgradient weight to extreme upper-tail residuals.
-- **$\mathcal{O}(nd + T_k\vert{}\mathcal{M}_k\vert{}d)$ Per-Iteration Complexity**: Vectorized $\mathcal{O}(nd)$ trust-radius and ray-intersection geometry paired with an $\mathcal{O}(T_k\vert{}\mathcal{M}_k\vert{}d)$ active-set inner projected subgradient solver.
-- **Provable KL Global Convergence**: Strictly enforces Conditions **H1–H3**, guaranteeing finite trajectory length ($\sum_{k=0}^\infty \Vert{}x^{k+1}-x^k\Vert{}_2 < \infty$) and finite-step convergence to a Clarke stationary point ($\mathbf{0} \in \partial f(x^\star)$).
-- **Comprehensive Benchmarking Pipeline**: Evaluates APMR on standardized California Housing ($n = 20,640$, $d = 12$) and synthetic regression benchmarks under asymmetric heavy-tailed Student-$t$ contamination against 7+ competing estimators.
-- **Publication-Grade Visualization Suite**: Colorblind-safe (Okabe–Ito) multi-panel plots for statistical robustness, parameter recovery, dual-candidate selection trajectories, and KL convergence verification.
-
----
-
 ## Project Structure
 
 ```text
