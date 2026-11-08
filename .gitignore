@@ -1,5 +1,5 @@
-*.csv
 .vscode
 __pycache__/
 article/
 article/
+
